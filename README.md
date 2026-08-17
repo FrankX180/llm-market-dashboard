@@ -15,8 +15,9 @@ GitHub Pages：https://frankx180.github.io/llm-market-dashboard/
 ## 自動更新
 
 GitHub Actions（`.github/workflows/update-dashboard.yml`）：
-- 每天 08:00 UTC（台灣 16:00）：更新 SDLLMTK 單價
-- 每週一 08:00 UTC：完整更新（OpenRouter 用量 + 單價）
+- 每天 00:40 UTC（台灣 08:40）：更新 SDLLMTK 單價
+- 每週一 00:40 UTC：完整更新（OpenRouter 用量 + 單價）
+- 與本機排程 S80（daily 08:40）對齊
 
 更新後自動 commit `index.html`，GitHub Pages 即時生效。
 
