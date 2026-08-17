@@ -1,0 +1,34 @@
+name: update-dashboard
+on:
+  schedule:
+    # 週一 08:00 UTC（台灣 16:00）：完整更新（OpenRouter 用量 + SDLLMTK 單價）
+    - cron: "0 8 * * 1"
+    # 週二～日 08:00 UTC：只更新 SDLLMTK 單價
+    - cron: "0 8 * * 2-7"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch OpenRouter usage (weekly Monday)
+        if: ${{ github.event.schedule == '0 8 * * 1' || github.event_name == 'workflow_dispatch' }}
+        run: python scripts/fetch_openrouter_daily.py
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Update dashboard (SDLLMTK price daily)
+        run: python scripts/update_market_triple.py --skip-mm
+      - name: Publish index.html
+        run: |
+          cp market_triple_dashboard.html index.html
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet && echo "no change" && exit 0
+          git commit -m "dashboard update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push
