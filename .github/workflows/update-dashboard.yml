@@ -3,8 +3,8 @@ on:
   schedule:
     # 週一 08:00 UTC（台灣 16:00）：完整更新（OpenRouter 用量 + SDLLMTK 單價）
     - cron: "0 8 * * 1"
-    # 週二～日 08:00 UTC：只更新 SDLLMTK 單價
-    - cron: "0 8 * * 2,3,4,5,6,7"
+    # 週二～日 08:00 UTC：只更新 SDLLMTK 單價（GitHub cron 星期 0-6，0=週日）
+    - cron: "0 8 * * 2,3,4,5,6,0"
   workflow_dispatch:
 permissions:
   contents: write
