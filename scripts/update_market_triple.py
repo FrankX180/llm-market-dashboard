@@ -1009,6 +1009,59 @@ render(P.defaultMode||'week');
 """
     CHART_PRODUCT.write_text(html, encoding="utf-8")
 
+def _parse_iso(d: str) -> date:
+    return datetime.strptime(d, "%Y-%m-%d").date()
+
+
+def _add_days(d: str, n: int) -> str:
+    return (_parse_iso(d) + timedelta(days=n)).isoformat()
+
+
+def _daily_labels(dmin: str, dmax: str) -> list[str]:
+    """Inclusive daily labels from dmin to dmax (YYYY-MM-DD)."""
+    a, b = _parse_iso(dmin), _parse_iso(dmax)
+    out: list[str] = []
+    cur = a
+    while cur <= b:
+        out.append(cur.isoformat())
+        cur += timedelta(days=1)
+    return out
+
+
+def _pad_daily_map(value_by_date: dict[str, float | None], dmin: str, dmax: str) -> tuple[list[str], list[float | None]]:
+    labels = _daily_labels(dmin, dmax)
+    values = [value_by_date.get(d) for d in labels]
+    return labels, values
+
+
+def _pad_weekly_map(
+    value_by_date: dict[str, float | None], week_labels: list[str]
+) -> tuple[list[str], list[float | None]]:
+    """Align series to shared week_labels (Sunday ends); missing -> None."""
+    return week_labels, [value_by_date.get(d) for d in week_labels]
+
+
+def _shared_axis_from_usage(
+    usage_rows: list[dict], weekly: list[dict]
+) -> tuple[str, str, str, str, str, list[str]]:
+    """Chart② master X domain.
+
+    Returns (day_min, day_max_data, week_min, week_max_data, axis_max, week_labels).
+    week_labels = complete weeks + one reserved empty Sunday (axis_max).
+    """
+    day_min = usage_rows[0]["date"]
+    day_max_data = usage_rows[-1]["date"]
+    if weekly:
+        week_min = weekly[0]["date"]
+        week_max_data = weekly[-1]["date"]
+    else:
+        _, _, week_min = _iso_week_key(_parse_iso(day_min))
+        _, _, week_max_data = _iso_week_key(_parse_iso(day_max_data))
+    axis_max = _add_days(week_max_data, 7)
+    week_labels = [r["date"] for r in weekly] + [axis_max]
+    return day_min, day_max_data, week_min, week_max_data, axis_max, week_labels
+
+
 
 def write_combined_dashboard(
     price_daily: dict[str, float],
@@ -1016,13 +1069,31 @@ def write_combined_dashboard(
     usage_rows: list[dict],
     product_rows: list[dict],
 ) -> None:
-    """One page: ① price ② multi-brand usage ③ expenditure proxy."""
-    # --- price ---
-    price_series = [{"date": d, "value": round(v, 4)} for d, v in sorted(price_daily.items())]
+    """One page: ① price ② multi-brand usage ③ expenditure proxy.
+
+    Chart② owns the X domain. Right edge = last complete week end + 7 days
+    (one reserved empty week). Charts ① and ③ pad/trim so head/tail match ②.
+    """
     n_official = sum(1 for r in price_rows if r.get("source") == "public_embed")
 
-    # --- usage multi ---
+    # raw price map (before axis pad)
+    price_by_date: dict[str, float | None] = {
+        d: round(v, 4) for d, v in sorted(price_daily.items())
+    }
+    last_p = None
+    if price_by_date:
+        ld = max(price_by_date)
+        last_p = {"date": ld, "value": price_by_date[ld]}
+
     usage_payload = None
+    product_payload = None
+    last_u = None
+    last_x = None
+    axis_meta: dict | None = None
+
+    day_min = day_max_data = week_min = week_max_data = axis_max = ""
+    week_labels: list[str] = []
+
     if usage_rows:
         sample = usage_rows[0]
         raw_cols = [k for k in sample.keys() if k not in ("date", "Total", "week", "days")]
@@ -1032,30 +1103,65 @@ def write_combined_dashboard(
             if c not in providers:
                 providers.append(c)
         weekly = aggregate_usage_weekly(usage_rows, providers)
+        day_min, day_max_data, week_min, week_max_data, axis_max, week_labels = (
+            _shared_axis_from_usage(usage_rows, weekly)
+        )
+        axis_meta = {
+            "day_min": day_min,
+            "day_max_data": day_max_data,
+            "week_min": week_min,
+            "week_max_data": week_max_data,
+            "axis_max": axis_max,
+        }
 
-        def pack_u(rows: list[dict]) -> dict:
-            labels = [r["date"] for r in rows]
-            series = {name: [round(float(r.get(name) or 0), 4) for r in rows] for name in providers + ["Total"]}
-            return {"labels": labels, "series": series}
+        # day mode: pad to axis_max with None (reserved future days)
+        day_labels = _daily_labels(day_min, axis_max)
+        day_by: dict[str, dict] = {r["date"]: r for r in usage_rows}
+
+        def pack_usage_day() -> dict:
+            series = {name: [] for name in providers + ["Total"]}
+            for d in day_labels:
+                row = day_by.get(d)
+                for name in providers + ["Total"]:
+                    if row is None:
+                        series[name].append(None)
+                    else:
+                        series[name].append(round(float(row.get(name) or 0), 4))
+            return {"labels": day_labels, "series": series}
+
+        def pack_usage_week() -> dict:
+            week_by = {r["date"]: r for r in weekly}
+            series = {name: [] for name in providers + ["Total"]}
+            for d in week_labels:
+                row = week_by.get(d)
+                for name in providers + ["Total"]:
+                    if row is None:
+                        series[name].append(None)
+                    else:
+                        series[name].append(round(float(row.get(name) or 0), 4))
+            return {"labels": week_labels, "series": series}
 
         styles = {n: {"color": c, "stack": s} for n, c, s in PROVIDER_STYLE}
         for p in providers:
             styles.setdefault(p, {"color": "#888888", "stack": True})
         styles.setdefault("Total", {"color": "#111111", "stack": False})
         usage_payload = {
-            "day": pack_u(usage_rows),
-            "week": pack_u(weekly),
+            "day": pack_usage_day(),
+            "week": pack_usage_week(),
             "providers": providers,
             "styles": styles,
             "defaultMode": "week",
+            "data_end": week_max_data,
         }
+        if weekly:
+            last_u = {
+                "date": week_max_data,
+                "value": round(float(weekly[-1].get("Total") or 0), 4),
+            }
 
-    # --- product ---
-    product_payload = None
+    # --- product (aligned to usage axis when available) ---
     if product_rows:
-        day_series = [
-            {"date": r["date"], "value": round(r["spend_usd_day"], 2)} for r in product_rows
-        ]
+        day_map = {r["date"]: round(r["spend_usd_day"], 2) for r in product_rows}
         buckets: dict[tuple[int, int], dict] = {}
         for r in product_rows:
             d = datetime.strptime(r["date"], "%Y-%m-%d").date()
@@ -1072,50 +1178,56 @@ def write_combined_dashboard(
             b["days"] += 1
             b["usage_sum"] += float(r["usage_total_b"])
             b["price_sum"] += float(r["price_sdllmtk"])
-        week_vals = []
+        week_map: dict[str, float] = {}
         for key in sorted(buckets):
             b = buckets[key]
             if b["days"] < 7:
                 continue
             avg_p = b["price_sum"] / b["days"]
-            week_vals.append(
-                {
-                    "date": b["date"],
-                    "value": round(avg_p * b["usage_sum"] * BILLION_TO_MILLION, 2),
-                }
-            )
+            week_map[b["date"]] = round(avg_p * b["usage_sum"] * BILLION_TO_MILLION, 2)
+
+        if axis_max and day_min and week_labels:
+            d_labels, d_vals = _pad_daily_map(day_map, day_min, axis_max)
+            w_labels, w_vals = _pad_weekly_map(week_map, week_labels)
+        else:
+            d_labels = sorted(day_map)
+            d_vals = [day_map[d] for d in d_labels]
+            w_labels = sorted(week_map)
+            w_vals = [week_map[d] for d in w_labels]
+
         product_payload = {
             "day": {
-                "labels": [r["date"] for r in day_series],
-                "values": [r["value"] for r in day_series],
+                "labels": d_labels,
+                "values": d_vals,
                 "unit": "USD / day (proxy)",
             },
             "week": {
-                "labels": [r["date"] for r in week_vals],
-                "values": [r["value"] for r in week_vals],
+                "labels": w_labels,
+                "values": w_vals,
                 "unit": "USD / week (proxy)",
             },
             "defaultMode": "week",
+            "data_end": max(week_map) if week_map else None,
         }
+        if week_map:
+            xd = max(week_map)
+            last_x = {"date": xd, "value": week_map[xd]}
 
-    last_p = price_series[-1] if price_series else None
-    last_u = None
-    if usage_payload:
-        tot = usage_payload["week"]["series"]["Total"]
-        last_u = {
-            "date": usage_payload["week"]["labels"][-1],
-            "value": tot[-1] if tot else None,
-        }
-    last_x = None
-    if product_payload and product_payload["week"]["labels"]:
-        last_x = {
-            "date": product_payload["week"]["labels"][-1],
-            "value": product_payload["week"]["values"][-1],
-        }
+    # --- price series aligned to chart② day domain when available ---
+    if axis_max and day_min:
+        p_labels, p_vals = _pad_daily_map(price_by_date, day_min, axis_max)
+        price_series = [
+            {"date": d, "value": v} for d, v in zip(p_labels, p_vals)
+        ]
+    else:
+        price_series = [
+            {"date": d, "value": v} for d, v in sorted(price_by_date.items()) if v is not None
+        ]
 
     bundle = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "price": {"series": price_series, "n_official": n_official},
+        "axis": axis_meta,
+        "price": {"series": price_series, "n_official": n_official, "data_end": last_p["date"] if last_p else None},
         "usage": usage_payload,
         "product": product_payload,
         "summary": {"price": last_p, "usage_week_total": last_u, "spend_week": last_x},
@@ -1305,22 +1417,36 @@ function fmtNum(v, digits) {{
   document.getElementById('summary').innerHTML = boxes.join('');
 }})();
 
+// last non-null index (axis may pad trailing empty points)
+function lastDefined(arr) {{
+  if (!arr || !arr.length) return -1;
+  for (let i = arr.length - 1; i >= 0; i--) {{
+    if (arr[i] != null && arr[i] !== '') return i;
+  }}
+  return -1;
+}}
+
 // ① price
 (function() {{
   const series = (D.price && D.price.series) || [];
   if (!series.length) return;
-  const last = series[series.length-1];
-  document.getElementById('meta1').innerHTML = `Latest <b>${{last.value.toFixed(4)}}</b> · ${{last.date}} · n=${{series.length}} · <span style="color:#888">滑過圖表看游標數值</span>`;
-  document.getElementById('foot1').textContent = `官方 public_embed 點：${{D.price.n_official||0}} · 其餘為圖表錨點/插值`;
+  const vals = series.map(r => r.value);
+  const li = lastDefined(vals);
+  const last = li >= 0 ? series[li] : null;
+  const axisNote = (D.axis && D.axis.axis_max) ? ` · axis→${{D.axis.axis_max}}` : '';
+  document.getElementById('meta1').innerHTML = last
+    ? `Latest <b>${{Number(last.value).toFixed(4)}}</b> · ${{last.date}} · n=${{series.length}}${{axisNote}} · <span style="color:#888">滑過圖表看游標數值</span>`
+    : '無價格資料';
+  document.getElementById('foot1').textContent = `官方 public_embed 點：${{D.price.n_official||0}} · 其餘為圖表錨點/插值 · X 軸與②對齊（頭尾）`;
   new Chart(document.getElementById('c1'), {{
     type: 'line',
     data: {{
       labels: series.map(r => r.date),
       datasets: [{{
         label: 'SDLLMTK',
-        data: series.map(r => r.value),
+        data: vals,
         borderColor: '#f5a623', backgroundColor: 'rgba(245,166,35,.12)',
-        fill: true, tension: 0.2, borderWidth: 2,
+        fill: true, tension: 0.2, borderWidth: 2, spanGaps: false,
         pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 16
       }}]
     }},
@@ -1425,11 +1551,16 @@ function renderUsage(mode) {{
   }}
   document.querySelectorAll('#mode2 button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   const data = buildUsageDatasets(mode);
+  if (data && data.datasets) {{
+    data.datasets.forEach(ds => {{ ds.spanGaps = false; }});
+  }}
   const tot = U[mode].series.Total || [];
-  const last = tot[tot.length - 1];
-  const end = U[mode].labels[U[mode].labels.length - 1];
+  const li = lastDefined(tot);
+  const last = li >= 0 ? tot[li] : null;
+  const end = li >= 0 ? U[mode].labels[li] : (U.data_end || '');
+  const axisEnd = U[mode].labels[U[mode].labels.length - 1] || '';
   document.getElementById('meta2').innerHTML =
-    `Latest Total <b>${{last != null ? Number(last).toLocaleString(undefined,{{maximumFractionDigits:1}}) : '—'}}</b> · ${{end}} · mode=${{mode}} · n=${{U[mode].labels.length}} · <span style="color:#888">滑過看各品牌數值 · 可全部取消後單選</span>`;
+    `Latest Total <b>${{last != null ? Number(last).toLocaleString(undefined,{{maximumFractionDigits:1}}) : '—'}}</b> · ${{end}} · mode=${{mode}} · n=${{U[mode].labels.length}} · axis→${{axisEnd}} · <span style="color:#888">滑過看各品牌數值 · 可全部取消後單選</span>`;
   if (chart2) chart2.destroy();
   chart2 = new Chart(document.getElementById('c2'), {{
     type: 'line',
@@ -1505,9 +1636,12 @@ function renderProduct(mode) {{
   }}
   document.querySelectorAll('#mode3 button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   const block = P[mode];
-  const last = block.values[block.values.length - 1];
+  const li = lastDefined(block.values);
+  const last = li >= 0 ? block.values[li] : null;
+  const end = li >= 0 ? block.labels[li] : (P.data_end || '');
+  const axisEnd = block.labels[block.labels.length - 1] || '';
   document.getElementById('meta3').innerHTML =
-    `Latest <b>${{last != null ? Number(last).toLocaleString() : '—'}}</b> · ${{block.labels[block.labels.length-1]}} · ${{block.unit}} · n=${{block.labels.length}} · <span style="color:#888">滑過看游標數值</span>`;
+    `Latest <b>${{last != null ? Number(last).toLocaleString() : '—'}}</b> · ${{end}} · ${{block.unit}} · n=${{block.labels.length}} · axis→${{axisEnd}} · <span style="color:#888">滑過看游標數值</span>`;
   if (chart3) chart3.destroy();
   chart3 = new Chart(document.getElementById('c3'), {{
     type: 'line',
@@ -1517,7 +1651,7 @@ function renderProduct(mode) {{
         label: 'Spend proxy',
         data: block.values,
         borderColor: '#7ee787', backgroundColor: 'rgba(126,231,135,.12)',
-        fill: true, tension: 0.2, borderWidth: 2,
+        fill: true, tension: 0.2, borderWidth: 2, spanGaps: false,
         pointRadius: 0, pointHoverRadius: 5, pointHitRadius: 16
       }}]
     }},
