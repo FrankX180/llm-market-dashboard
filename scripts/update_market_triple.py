@@ -1107,7 +1107,7 @@ def write_combined_dashboard(
             "value": tot[-1] if tot else None,
         }
     last_x = None
-    if product_payload:
+    if product_payload and product_payload["week"]["labels"]:
         last_x = {
             "date": product_payload["week"]["labels"][-1],
             "value": product_payload["week"]["values"][-1],
