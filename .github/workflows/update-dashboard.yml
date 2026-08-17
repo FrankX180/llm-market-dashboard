@@ -25,7 +25,7 @@ jobs:
         run: python scripts/update_market_triple.py --skip-mm
       - name: Publish index.html
         run: |
-          cp market_triple_dashboard.html index.html
+          cp scripts/market_triple_dashboard.html index.html
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html
