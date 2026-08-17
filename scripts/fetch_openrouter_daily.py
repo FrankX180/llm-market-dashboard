@@ -2,15 +2,15 @@
 """
 Fetch OpenRouter official daily usage:
   GET https://openrouter.ai/api/v1/datasets/rankings-daily
-  Auth: OPENROUTER_API_KEY (env) or E:\\_PluginTools\\Memory\\secrets\\LLM_API_KEY.MD
+  Auth: environment variable OPENROUTER_API_KEY only
 
-Writes:
+Writes (under this scripts/ directory):
   openrouter_api_daily_models.csv  - model-level (date, model, tokens)
   openrouter_usage_daily.csv       - provider aggregates (billion tokens / day) for dashboard
 
 Usage:
-  & R:\\PythonProgram\\Python312\\python.exe fetch_openrouter_daily.py
-  & R:\\PythonProgram\\Python312\\python.exe fetch_openrouter_daily.py --start 2025-12-01 --end 2026-08-09
+  python fetch_openrouter_daily.py
+  python fetch_openrouter_daily.py --start 2025-12-01 --end 2026-08-09
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ MODELS_CSV = DIR / "openrouter_api_daily_models.csv"
 USAGE_CSV = DIR / "openrouter_usage_daily.csv"
 META_JSON = DIR / "openrouter_api_meta.json"
 RAW_DIR = DIR / "openrouter_api_raw"
-SECRETS = Path(r"E:\_PluginTools\Memory\secrets\LLM_API_KEY.MD")
+# Public CI: key only from env (never hardcode local secret paths in this repo).
 API = "https://openrouter.ai/api/v1/datasets/rankings-daily"
 # 1e9 tokens = 1 billion (matches MacroMicro unit "b")
 TOKENS_PER_B = 1_000_000_000.0
@@ -83,32 +83,11 @@ def load_api_key() -> str:
     env = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
     if env:
         return env
-    if not SECRETS.exists():
-        raise RuntimeError("no OPENROUTER_API_KEY and secrets file missing")
-    text = SECRETS.read_text(encoding="utf-8")
-    # section OpenRouter then next sk-or- line
-    lines = text.splitlines()
-    in_or = False
-    for line in lines:
-        s = line.strip()
-        if s.lower() == "openrouter":
-            in_or = True
-            continue
-        if in_or:
-            if s.startswith("-----") or (s.endswith("_KEY") and "OPENROUTER" not in s.upper() and s.isupper()):
-                # left section on next provider header-ish
-                if s.startswith("-----"):
-                    break
-            if s.startswith("sk-or-") or s.startswith("sk-"):
-                return s
-            m = re.search(r"(sk-or-[A-Za-z0-9_\-]+)", s)
-            if m:
-                return m.group(1)
-    # fallback: any sk-or-
-    m = re.search(r"(sk-or-[A-Za-z0-9_\-]+)", text)
-    if m:
-        return m.group(1)
-    raise RuntimeError("OPENROUTER key not found in secrets")
+    raise RuntimeError(
+        "OPENROUTER_API_KEY is not set. Export it in the environment "
+        "(GitHub Actions secret or local shell)."
+    )
+
 
 
 def provider_of(permaslug: str) -> str:

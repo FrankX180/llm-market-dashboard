@@ -1,7 +1,7 @@
 name: update-dashboard
 on:
   schedule:
-    # 台灣 08:40 = UTC 00:40（對齊本機 S80；OpenRouter as_of 約此時就緒）
+    # Taiwan 08:40 = UTC 00:40 (OpenRouter as_of roughly ready by then)
     # 週一：完整更新（OpenRouter 用量 + SDLLMTK 單價）
     - cron: "40 0 * * 1"
     # 週二～日：只更新 SDLLMTK 單價（GitHub cron 星期 0-6，0=週日）

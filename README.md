@@ -1,6 +1,6 @@
 # LLM 市場三圖儀表板
 
-GitHub Pages：https://frankx180.github.io/llm-market-dashboard/
+GitHub Pages：部署後見 repo 的 Settings → Pages（預設網址為 `https://<owner>.github.io/<repo>/`）。
 
 三張圖：
 1. SDLLMTK 價格（USD / 百萬 tokens）
@@ -17,17 +17,22 @@ GitHub Pages：https://frankx180.github.io/llm-market-dashboard/
 GitHub Actions（`.github/workflows/update-dashboard.yml`）：
 - 每天 00:40 UTC（台灣 08:40）：更新 SDLLMTK 單價
 - 每週一 00:40 UTC：完整更新（OpenRouter 用量 + 單價）
-- 與本機排程 S80（daily 08:40）對齊
 
 更新後自動 commit `index.html`，GitHub Pages 即時生效。
+
+## 必要 Secret
+
+Repo → Settings → Secrets and variables → Actions：
+
+| Name | 用途 |
+|------|------|
+| `OPENROUTER_API_KEY` | 週一／手動抓 OpenRouter 用量 |
 
 ## 手動觸發
 
 Repo → Actions → update-dashboard → Run workflow（完整更新）。
 
-## 本機對應
+## 本機腳本（相對本 repo）
 
-原始專案：`E:\_Project\股票研究\產業知識庫\03_產業鏈\SDLLMTK_LLM代幣支出指數\`
-- `update_market_triple.py`：產生儀表板
-- `fetch_openrouter_daily.py`：抓 OpenRouter 用量
-- `run_sdllmtk_daily.py`：本機每日排程入口
+- `scripts/update_market_triple.py`：產生儀表板
+- `scripts/fetch_openrouter_daily.py`：抓 OpenRouter 用量（需環境變數 `OPENROUTER_API_KEY`）

@@ -10,9 +10,9 @@ Daily triple market dashboard:
 MacroMicro /charts/data needs headed Chromium (Cloudflare). headless often 403.
 
 Usage:
-  & R:\\PythonProgram\\Python312\\python.exe update_market_triple.py
-  & R:\\PythonProgram\\Python312\\python.exe update_market_triple.py --skip-mm   # only price + recompute product
-  & R:\\PythonProgram\\Python312\\python.exe update_market_triple.py --import-mm path\\to\\chart_data_raw.json
+  python update_market_triple.py
+  python update_market_triple.py --skip-mm   # only price + recompute product
+  python update_market_triple.py --import-mm path/to/chart_data_raw.json
 """
 from __future__ import annotations
 
