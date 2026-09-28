@@ -1,11 +1,10 @@
 name: update-dashboard
+# 2026-09-28 停排程（Cyndi）
+# 本 repo 為舊站殘留：對外公開站已於 2026-08-17 遷至 fxgame888-boop/llm-market-dashboard
+# （帳號改名後為 novaevo905）。為避免兩站各自抓取造成資料漂移，並止住
+# 每週一 401 失敗通知噪音，移除全部 schedule。
+# 需要補資料時用 Actions -> update-dashboard -> Run workflow 手動觸發（下面仍保留）。
 on:
-  schedule:
-    # Taiwan 08:40 = UTC 00:40 (OpenRouter as_of roughly ready by then)
-    # 週一：完整更新（OpenRouter 用量 + SDLLMTK 單價）
-    - cron: "40 0 * * 1"
-    # 週二～日：只更新 SDLLMTK 單價（GitHub cron 星期 0-6，0=週日）
-    - cron: "40 0 * * 2,3,4,5,6,0"
   workflow_dispatch:
 permissions:
   contents: write
