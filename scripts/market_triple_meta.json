@@ -1,9 +1,9 @@
 {
-  "updated_at": "2026-11-19T07:52:56",
-  "price_points": 171,
-  "price_daily": 352,
-  "usage_days": 350,
-  "product_days": 350,
+  "updated_at": "2026-11-20T03:56:22",
+  "price_points": 172,
+  "price_daily": 353,
+  "usage_days": 354,
+  "product_days": 353,
   "price_status": {
     "source": "public_embed",
     "error": null,
@@ -12,31 +12,31 @@
       "api: skipped (no SILICONDATA_API_TOKEN)",
       "product_page: RuntimeError: product page reading block not found"
     ],
-    "last_date": "2026-11-17"
+    "last_date": "2026-11-18"
   },
   "last_price": {
-    "date": "2026-11-17",
-    "value": 0.7938,
+    "date": "2026-11-18",
+    "value": 0.7566,
     "source": "public_embed",
     "note": "portal token-index-chart RSC"
   },
   "last_usage_total": {
-    "date": "2026-11-15",
-    "Total": "25484.3611"
+    "date": "2026-11-19",
+    "Total": "53851.6748"
   },
   "last_product": {
-    "date": "2026-11-15",
-    "price_sdllmtk": 0.8028,
-    "usage_total_b": 25484.3611,
-    "spend_usd_day": 20458845.09108,
-    "product_raw": 20458.84509108
+    "date": "2026-11-18",
+    "price_sdllmtk": 0.7566,
+    "usage_total_b": 56246.1443,
+    "spend_usd_day": 42555832.777380005,
+    "product_raw": 42555.832777380005
   },
   "formula": "spend_usd_day = SDLLMTK * usage_total_b * 1000",
   "charts": [
-    "/home/runner/work/LLM/LLM/scripts/market_triple_dashboard.html",
-    "/home/runner/work/LLM/LLM/scripts/sdllmtk_chart.html",
-    "/home/runner/work/LLM/LLM/scripts/openrouter_usage_chart.html",
-    "/home/runner/work/LLM/LLM/scripts/expenditure_proxy_chart.html"
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/sdllmtk_chart.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/openrouter_usage_chart.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/expenditure_proxy_chart.html"
   ],
-  "dashboard": "/home/runner/work/LLM/LLM/scripts/market_triple_dashboard.html"
+  "dashboard": "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html"
 }
