@@ -1,0 +1,42 @@
+{
+  "updated_at": "2026-11-19T07:52:56",
+  "price_points": 171,
+  "price_daily": 352,
+  "usage_days": 350,
+  "product_days": 350,
+  "price_status": {
+    "source": "public_embed",
+    "error": null,
+    "stale_days": 2,
+    "skipped": [
+      "api: skipped (no SILICONDATA_API_TOKEN)",
+      "product_page: RuntimeError: product page reading block not found"
+    ],
+    "last_date": "2026-11-17"
+  },
+  "last_price": {
+    "date": "2026-11-17",
+    "value": 0.7938,
+    "source": "public_embed",
+    "note": "portal token-index-chart RSC"
+  },
+  "last_usage_total": {
+    "date": "2026-11-15",
+    "Total": "25484.3611"
+  },
+  "last_product": {
+    "date": "2026-11-15",
+    "price_sdllmtk": 0.8028,
+    "usage_total_b": 25484.3611,
+    "spend_usd_day": 20458845.09108,
+    "product_raw": 20458.84509108
+  },
+  "formula": "spend_usd_day = SDLLMTK * usage_total_b * 1000",
+  "charts": [
+    "/home/runner/work/LLM/LLM/scripts/market_triple_dashboard.html",
+    "/home/runner/work/LLM/LLM/scripts/sdllmtk_chart.html",
+    "/home/runner/work/LLM/LLM/scripts/openrouter_usage_chart.html",
+    "/home/runner/work/LLM/LLM/scripts/expenditure_proxy_chart.html"
+  ],
+  "dashboard": "/home/runner/work/LLM/LLM/scripts/market_triple_dashboard.html"
+}

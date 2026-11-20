@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
 import sys
@@ -57,6 +58,13 @@ PROVIDER_STYLE = [
 
 EMBED_URL = "https://portal.silicondata.com/token-index-chart"
 LATEST_DATE_URL = "https://api.silicondata.com/backend/api/token-index/latest-date"
+API_INDEX_URL = "https://api.silicondata.com/backend/api/token-index/index"
+PRODUCT_INDEX_URL = (
+    "https://www.silicondata.com/products/silicon-index/llm-token-expenditure-index"
+)
+# set SILICONDATA_API_TOKEN (portal login token) to use the official 4-decimal API
+API_TOKEN_ENV = "SILICONDATA_API_TOKEN"
+OFFICIAL_SOURCES = {"api_official", "public_embed", "product_page"}
 MM_PAGE = "https://www.macromicro.me/charts/148532/world-openrouter-token-usage"
 MM_DATA = "https://www.macromicro.me/charts/data/148532"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -106,6 +114,126 @@ def fetch_sdllmtk_window() -> dict[str, float]:
     return out
 
 
+# ---------- price: official API (needs token) ----------
+def fetch_sdllmtk_api(token: str, days_back: int = 21) -> dict[str, float]:
+    """POST /api/token-index/index. Returns {date: value}, skipping '-1' (no data)."""
+    end = date.today()
+    body = {
+        "token": "expenditure",
+        "index_version": "v1",
+        "starting_date": (end - timedelta(days=days_back)).isoformat(),
+        "ending_date": end.isoformat(),
+    }
+    req = urllib.request.Request(
+        API_INDEX_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "User-Agent": UA,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode("utf-8", "replace"))
+    data = payload.get("data") or {}
+    out: dict[str, float] = {}
+    for d, v in (data.get("indexes") or {}).items():
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv < 0:  # -1 = no publication that day
+            continue
+        out[d] = fv
+    if not out:
+        raise RuntimeError(f"API returned no usable indexes (meta={payload.get('meta')})")
+    return out
+
+
+# ---------- price: public product page (2 decimals, daily close) ----------
+def fetch_sdllmtk_product_page() -> dict[str, float]:
+    """Read the public reading block on the siliconindex product page.
+
+    Portal embed data went private on 2026-10-21; the marketing site still
+    server-renders the latest daily close (rounded to 2 decimals).
+
+    Same-series evidence (2026-10-23): last portal value 2026-10-20 = 0.9411
+    rounds to the 0.94 the page prints as of Oct 21, i.e. same index + 2dp
+    quantisation (+/-0.005), not a different metric. sanity_check_window()
+    guards the case where that stops being true.
+    """
+    html = http_get(PRODUCT_INDEX_URL).replace('\\"', '"')
+    m = re.search(
+        r'"llm-token"\s*:\s*\{\s*"value"\s*:\s*"([0-9.]+)"'
+        r'.{0,200}?"asOf"\s*:\s*"As of ([A-Za-z]{3,9}) (\d{1,2}), (\d{4})"',
+        html,
+        re.S,
+    )
+    if not m:
+        raise RuntimeError("product page reading block not found")
+    value = float(m.group(1))
+    ds = f"{m.group(2)} {m.group(3)} {m.group(4)}"
+    day = datetime.strptime(ds, "%b %d %Y").date().isoformat()
+    if value <= 0:
+        raise RuntimeError(f"product page value not positive: {value}")
+    return {day: value}
+
+
+def sanity_check_window(
+    window: dict[str, float], existing: list[dict], source: str, max_dev: float = 0.25
+) -> None:
+    """Guard against the upstream silently redefining what the number means.
+
+    Different sources must stay on the same scale: if a fetched value deviates
+    from the last known price by more than max_dev, treat it as a source change
+    instead of pushing garbage into the CSV.
+    """
+    if source == "api_official" or not existing:
+        return
+    last = max(existing, key=lambda r: r["date"])
+    base = float(last["value"])
+    if base <= 0:
+        return
+    for d, v in window.items():
+        dev = abs(float(v) - base) / base
+        if dev > max_dev:
+            raise RuntimeError(
+                f"{source} value {d}={v} deviates {dev:.1%} from last known {last['date']}={base}; "
+                "refusing to merge (source scale changed?)"
+            )
+
+
+def fetch_price_any_source(existing: list[dict] | None = None) -> tuple[dict[str, float], str, list[str]]:
+    """Try official API -> public product page -> legacy portal RSC embed.
+
+    Returns (window, source_name, errors_of_skipped_sources). The caller must log
+    the errors: a silently discarded failure is how an upstream outage turns
+    into a green job with frozen data.
+    """
+    token = (os.environ.get(API_TOKEN_ENV) or "").strip()
+    errors: list[str] = []
+    if token:
+        try:
+            window = fetch_sdllmtk_api(token)
+            return window, "api_official", errors
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"api: {type(exc).__name__}: {exc}")
+    else:
+        errors.append(f"api: skipped (no {API_TOKEN_ENV})")
+
+    for name, fn in (("product_page", fetch_sdllmtk_product_page), ("public_embed", fetch_sdllmtk_window)):
+        try:
+            window = fn()
+            sanity_check_window(window, existing or [], name)
+            return window, name, errors
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    raise RuntimeError("all SDLLMTK sources failed -> " + " | ".join(errors))
+
+
 def load_price_rows() -> list[dict]:
     if not PRICE_CSV.exists():
         return []
@@ -124,19 +252,25 @@ def load_price_rows() -> list[dict]:
     return rows
 
 
-def merge_price(existing: list[dict], window: dict[str, float]) -> list[dict]:
+def merge_price(existing: list[dict], window: dict[str, float], source: str = "public_embed") -> list[dict]:
     rank = {
+        "api_official": 120,
         "public_embed": 100,
         "portal_api": 100,
+        "product_page": 90,
+        "manual": 60,
         "press_cio": 50,
         "approx_chart": 10,
-        "manual": 60,
+    }
+    note = {
+        "api_official": "api.silicondata.com /api/token-index/index",
+        "public_embed": "portal token-index-chart RSC",
+        "product_page": "silicondata product page (2dp close)",
     }
     by = {r["date"]: r for r in existing}
     for d, v in window.items():
-        src = "public_embed"
-        if d not in by or rank.get(src, 0) >= rank.get(by[d].get("source"), 0):
-            by[d] = {"date": d, "value": v, "source": src, "note": "portal token-index-chart RSC"}
+        if d not in by or rank.get(source, 0) >= rank.get(by[d].get("source"), 0):
+            by[d] = {"date": d, "value": v, "source": source, "note": note.get(source, "")}
     return [by[k] for k in sorted(by)]
 
 
@@ -342,6 +476,57 @@ def save_product(rows: list[dict]) -> None:
             )
 
 
+def aggregate_product_weekly(
+    price_by_date: dict[str, float],
+    usage_by_date: dict[str, float],
+) -> list[dict]:
+    """Week spend = avg(available SDLLMTK in week) × sum(usage week) × 1000.
+
+    Usage must be a complete ISO week (7 days). Price may lag 1 day behind usage;
+    use whatever price points exist in that week (need ≥1). Do NOT require
+    price∩usage overlap to also be 7 days — that wrongly drops the newest week.
+    """
+    buckets: dict[tuple[int, int], dict] = {}
+    for ds, u in usage_by_date.items():
+        d = datetime.strptime(ds, "%Y-%m-%d").date()
+        y, w, end = _iso_week_key(d)
+        key = (y, w)
+        if key not in buckets:
+            buckets[key] = {
+                "date": end,
+                "week": f"{y}-W{w:02d}",
+                "usage_days": 0,
+                "usage_sum": 0.0,
+                "price_sum": 0.0,
+                "price_days": 0,
+            }
+        b = buckets[key]
+        b["usage_days"] += 1
+        b["usage_sum"] += float(u)
+        if ds in price_by_date:
+            b["price_sum"] += float(price_by_date[ds])
+            b["price_days"] += 1
+    out: list[dict] = []
+    for key in sorted(buckets):
+        b = buckets[key]
+        if b["usage_days"] < 7 or b["price_days"] < 1:
+            continue
+        avg_p = b["price_sum"] / b["price_days"]
+        spend = avg_p * b["usage_sum"] * BILLION_TO_MILLION
+        out.append(
+            {
+                "date": b["date"],
+                "week": b["week"],
+                "days": b["usage_days"],
+                "price_days": b["price_days"],
+                "price_sdllmtk_avg": avg_p,
+                "usage_total_b_sum": b["usage_sum"],
+                "spend_usd_week": spend,
+            }
+        )
+    return out
+
+
 # ---------- charts ----------
 def _chart_shell(title: str, subtitle: str, body_js_data: str, y_label: str, color: str) -> str:
     return f"""<!DOCTYPE html>
@@ -426,7 +611,6 @@ new Chart(document.getElementById('c'), {{
 
 def write_price_chart(price_daily: dict[str, float], price_rows: list[dict]) -> None:
     series = [{"date": d, "value": round(v, 4)} for d, v in sorted(price_daily.items())]
-    off = [r for r in price_rows if r.get("source") == "public_embed"]
     html = _chart_shell(
         "① SDLLMTK 價格（USD / 百萬 tokens）",
         "Silicon Data LLM Token Expenditure Index · 官方近7日 + 歷史錨點插值 · "
@@ -437,9 +621,15 @@ def write_price_chart(price_daily: dict[str, float], price_rows: list[dict]) -> 
         "#f5a623",
     )
     # inject official note
+    counts: dict[str, int] = {}
+    for r in price_rows:
+        s = r.get("source") or "unknown"
+        counts[s] = counts.get(s, 0) + 1
+    mix = " · ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    last_src = price_rows[-1].get("source") if price_rows else "-"
     html = html.replace(
         'id="leg"></div>',
-        f'id="leg">官方 public_embed 點數：{len(off)} · 其餘為圖表錨點/插值，非完整官方日收。</div>',
+        f'id="leg">最近一筆來源：{last_src} · 點數分布：{mix} · 其餘為錨點/插值，非完整官方日收。</div>',
     )
     CHART_PRICE.write_text(html, encoding="utf-8")
 
@@ -811,7 +1001,11 @@ render(mode);
     CHART_USAGE.write_text(html, encoding="utf-8")
 
 
-def write_product_chart(product_rows: list[dict]) -> None:
+def write_product_chart(
+    product_rows: list[dict],
+    price_daily: dict[str, float] | None = None,
+    usage_total: dict[str, float] | None = None,
+) -> None:
     """Price x usage with day/week; week uses weekly usage sum * week-avg price."""
     if not product_rows:
         return
@@ -825,41 +1019,12 @@ def write_product_chart(product_rows: list[dict]) -> None:
         }
         for r in product_rows
     ]
-    # weekly: sum usage, avg price, spend = avg_price * sum_usage * 1000
-    buckets: dict[tuple[int, int], dict] = {}
-    for r in product_rows:
-        d = datetime.strptime(r["date"], "%Y-%m-%d").date()
-        y, w, end = _iso_week_key(d)
-        key = (y, w)
-        if key not in buckets:
-            buckets[key] = {
-                "date": end,
-                "week": f"{y}-W{w:02d}",
-                "days": 0,
-                "usage_sum": 0.0,
-                "price_sum": 0.0,
-            }
-        b = buckets[key]
-        b["days"] += 1
-        b["usage_sum"] += float(r["usage_total_b"])
-        b["price_sum"] += float(r["price_sdllmtk"])
-    week_rows = []
-    for key in sorted(buckets):
-        b = buckets[key]
-        if b["days"] < 7:
-            continue  # same rule as usage week: no partial week on chart/CSV
-        avg_p = b["price_sum"] / b["days"]
-        spend = avg_p * b["usage_sum"] * BILLION_TO_MILLION
-        week_rows.append(
-            {
-                "date": b["date"],
-                "week": b["week"],
-                "days": b["days"],
-                "price_sdllmtk_avg": avg_p,
-                "usage_total_b_sum": b["usage_sum"],
-                "spend_usd_week": spend,
-            }
-        )
+    # weekly: complete usage week × avg of available prices in that week
+    if price_daily is None:
+        price_daily = {r["date"]: float(r["price_sdllmtk"]) for r in product_rows}
+    if usage_total is None:
+        usage_total = {r["date"]: float(r["usage_total_b"]) for r in product_rows}
+    week_rows = aggregate_product_weekly(price_daily, usage_total)
     with PRODUCT_WEEKLY_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(
             f,
@@ -1074,7 +1239,7 @@ def write_combined_dashboard(
     Chart② owns the X domain. Right edge = last complete week end + 7 days
     (one reserved empty week). Charts ① and ③ pad/trim so head/tail match ②.
     """
-    n_official = sum(1 for r in price_rows if r.get("source") == "public_embed")
+    n_official = sum(1 for r in price_rows if r.get("source") in OFFICIAL_SOURCES)
 
     # raw price map (before axis pad)
     price_by_date: dict[str, float | None] = {
@@ -1162,29 +1327,18 @@ def write_combined_dashboard(
     # --- product (aligned to usage axis when available) ---
     if product_rows:
         day_map = {r["date"]: round(r["spend_usd_day"], 2) for r in product_rows}
-        buckets: dict[tuple[int, int], dict] = {}
-        for r in product_rows:
-            d = datetime.strptime(r["date"], "%Y-%m-%d").date()
-            y, w, end = _iso_week_key(d)
-            key = (y, w)
-            if key not in buckets:
-                buckets[key] = {
-                    "date": end,
-                    "days": 0,
-                    "usage_sum": 0.0,
-                    "price_sum": 0.0,
-                }
-            b = buckets[key]
-            b["days"] += 1
-            b["usage_sum"] += float(r["usage_total_b"])
-            b["price_sum"] += float(r["price_sdllmtk"])
-        week_map: dict[str, float] = {}
-        for key in sorted(buckets):
-            b = buckets[key]
-            if b["days"] < 7:
-                continue
-            avg_p = b["price_sum"] / b["days"]
-            week_map[b["date"]] = round(avg_p * b["usage_sum"] * BILLION_TO_MILLION, 2)
+        usage_by_date = {
+            r["date"]: float(r["Total"])
+            for r in usage_rows
+            if r.get("date") and r.get("Total") not in (None, "")
+        }
+        if not usage_by_date:
+            usage_by_date = {r["date"]: float(r["usage_total_b"]) for r in product_rows}
+        price_for_week = {d: float(v) for d, v in price_by_date.items() if v is not None}
+        week_rows_prod = aggregate_product_weekly(price_for_week, usage_by_date)
+        week_map: dict[str, float] = {
+            r["date"]: round(r["spend_usd_week"], 2) for r in week_rows_prod
+        }
 
         if axis_max and day_min and week_labels:
             d_labels, d_vals = _pad_daily_map(day_map, day_min, axis_max)
@@ -1227,7 +1381,15 @@ def write_combined_dashboard(
     bundle = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "axis": axis_meta,
-        "price": {"series": price_series, "n_official": n_official, "data_end": last_p["date"] if last_p else None},
+        "price": {
+            "series": price_series,
+            "n_official": n_official,
+            "data_end": last_p["date"] if last_p else None,
+            "last_source": (price_rows[-1].get("source") if price_rows else None),
+            "stale_days": (
+                (date.today() - _parse_iso(price_rows[-1]["date"])).days if price_rows else None
+            ),
+        },
         "usage": usage_payload,
         "product": product_payload,
         "summary": {"price": last_p, "usage_week_total": last_u, "spend_week": last_x},
@@ -1250,7 +1412,11 @@ def write_combined_dashboard(
   body {{ margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }}
   .wrap {{ max-width: 1180px; margin: 0 auto; padding: 20px 18px 48px; }}
   header {{ margin-bottom: 16px; }}
-  header h1 {{ font-size: 22px; margin: 0 0 6px; font-weight: 600; }}
+  .headrow {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }}
+  .headrow h1 {{ font-size: 22px; margin: 0 0 6px; font-weight: 600; }}
+  .lang-switch {{ display: inline-flex; border: 1px solid #333; border-radius: 999px; overflow: hidden; flex-shrink: 0; }}
+  .lang-switch button {{ border: 0; background: #1a1a1c; padding: 5px 12px; font-size: 12px; cursor: pointer; color: #aaa; }}
+  .lang-switch button.on {{ background: #12b886; color: #fff; font-weight: 600; }}
   header .sub {{ color: var(--muted); font-size: 13px; line-height: 1.5; }}
   .nav {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }}
   .nav a {{
@@ -1290,67 +1456,211 @@ def write_combined_dashboard(
   .chart-box.tall {{ height: 420px; }}
   .foot {{ font-size: 11px; color: #777; margin-top: 8px; line-height: 1.5; }}
   a {{ color: #7ec8e3; }}
+  .page-foot {{
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 10px; padding: 0 2px 4px; color: var(--muted); font-size: 12px;
+  }}
+  .page-foot #traffic {{ cursor: pointer; user-select: none; }}
+  .page-foot #traffic:hover {{ color: #ccc; }}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>LLM 市場三圖儀表板</h1>
-    <div class="sub">
-      ① SDLLMTK 價格 · ② OpenRouter 各品牌用量（可點圖例顯示/取消 · 日/週）· ③ 價格×用量支出 proxy ·
-      更新：<span id="upd"></span>
+    <div class="headrow">
+      <div>
+        <h1 data-i18n="title">LLM 市場三圖儀表板</h1>
+        <div class="sub">
+          <span data-i18n="subtitle">① SDLLMTK 價格 · ② OpenRouter 各品牌用量（可點圖例顯示/取消 · 日/週）· ③ 價格×用量支出 proxy ·</span>
+          <span data-i18n="updated">更新：</span><span id="upd"></span>
+        </div>
+      </div>
+      <div class="lang-switch" id="langSwitch">
+        <button type="button" data-lang="zh" class="on">中文</button>
+        <button type="button" data-lang="en">EN</button>
+      </div>
     </div>
     <div class="nav">
-      <a href="#s1">① 價格</a>
-      <a href="#s2">② 用量</a>
-      <a href="#s3">③ 支出</a>
+      <a href="#s1" data-i18n="nav1">① 價格</a>
+      <a href="#s2" data-i18n="nav2">② 用量</a>
+      <a href="#s3" data-i18n="nav3">③ 支出</a>
     </div>
     <div class="summary" id="summary"></div>
   </header>
 
   <section class="card" id="s1">
-    <h2>① SDLLMTK 價格</h2>
-    <div class="desc">USD / 百萬 tokens · 官方近7日 + 歷史錨點插值</div>
+    <h2 data-i18n="h2price">① SDLLMTK 價格</h2>
+    <div class="desc" data-i18n="descprice">USD / 百萬 tokens · 官方近7日 + 歷史錨點插值</div>
     <div class="meta" id="meta1"></div>
     <div class="chart-box"><canvas id="c1"></canvas></div>
     <div class="foot" id="foot1"></div>
   </section>
 
   <section class="card" id="s2">
-    <h2>② OpenRouter Token 使用量（多品牌）</h2>
-    <div class="desc">OpenRouter Datasets · 點圖例顯示/取消 · 「全部取消」後再點一品牌可單看 · 預設週加總</div>
+    <h2 data-i18n="h2usage">② OpenRouter Token 使用量（多品牌）</h2>
+    <div class="desc" data-i18n="descusage">OpenRouter Datasets · 點圖例顯示/取消 · 「全部取消」後再點一品牌可單看 · 預設週加總</div>
     <div class="toolbar">
       <div class="seg" id="mode2">
-        <button type="button" data-mode="day">日</button>
-        <button type="button" data-mode="week" class="on">週加總</button>
+        <button type="button" data-mode="day" data-i18n="day">日</button>
+        <button type="button" data-mode="week" class="on" data-i18n="week">週加總</button>
       </div>
       <div class="act">
-        <button type="button" id="btn2AllOn" title="顯示所有品牌 + Total">全部顯示</button>
-        <button type="button" id="btn2AllOff" title="取消全部，再點圖例單選一品牌">全部取消</button>
+        <button type="button" id="btn2AllOn" data-i18n="showall" data-i18n-title="showall_t">全部顯示</button>
+        <button type="button" id="btn2AllOff" data-i18n="hideall" data-i18n-title="hideall_t">全部取消</button>
       </div>
     </div>
     <div class="meta" id="meta2"></div>
     <div class="chart-box tall"><canvas id="c2"></canvas></div>
-    <div class="foot">單位 billion tokens。週 = 完整 ISO 週一～日 7 日加總，x 軸標籤為該週日；未滿週不進圖。Total 為全市場合計線。</div>
+    <div class="foot" data-i18n="footusage">單位 billion tokens。週 = 完整 ISO 週一～日 7 日加總，x 軸標籤為該週日；未滿週不進圖。Total 為全市場合計線。</div>
   </section>
 
   <section class="card" id="s3">
-    <h2>③ 市場支出規模 proxy（價格 × 使用量）</h2>
-    <div class="desc">spend = SDLLMTK × usage_b × 1000 · 週模式用週均價 × 週用量合計</div>
+    <h2 data-i18n="h2spend">③ 市場支出規模 proxy（價格 × 使用量）</h2>
+    <div class="desc" data-i18n="descspend">spend = SDLLMTK × usage_b × 1000 · 週模式用週均價 × 週用量合計</div>
     <div class="toolbar">
       <div class="seg" id="mode3">
-        <button type="button" data-mode="day">日</button>
-        <button type="button" data-mode="week" class="on">週加總</button>
+        <button type="button" data-mode="day" data-i18n="day">日</button>
+        <button type="button" data-mode="week" class="on" data-i18n="week">週加總</button>
       </div>
     </div>
     <div class="meta" id="meta3"></div>
     <div class="chart-box"><canvas id="c3"></canvas></div>
-    <div class="foot">OpenRouter 表面用量 × 全市場混合單價，非全球真實營收、非百分比市占。</div>
+    <div class="foot" data-i18n="footspend">OpenRouter 表面用量 × 全市場混合單價，非全球真實營收、非百分比市占。</div>
   </section>
+  <div class="page-foot">
+    <div id="traffic" title="點一下切換：在線 → 本月 → 累計">在線—，今天—/峰值—</div>
+  </div>
 </div>
 <script>
 const D = {data_json};
 document.getElementById('upd').textContent = D.updated_at || '';
+
+const I18N = {{
+  zh: {{
+    title: 'LLM 市場三圖儀表板',
+    subtitle: '① SDLLMTK 價格 · ② OpenRouter 各品牌用量（可點圖例顯示/取消 · 日/週）· ③ 價格×用量支出 proxy ·',
+    updated: '更新：',
+    nav1: '① 價格', nav2: '② 用量', nav3: '③ 支出',
+    h2price: '① SDLLMTK 價格',
+    descprice: 'USD / 百萬 tokens · 官方近7日 + 歷史錨點插值',
+    h2usage: '② OpenRouter Token 使用量（多品牌）',
+    descusage: 'OpenRouter Datasets · 點圖例顯示/取消 · 「全部取消」後再點一品牌可單看 · 預設週加總',
+    day: '日', week: '週加總',
+    showall: '全部顯示', hideall: '全部取消',
+    showall_t: '顯示所有品牌 + Total', hideall_t: '取消全部，再點圖例單選一品牌',
+    footusage: '單位 billion tokens。週 = 完整 ISO 週一～日 7 日加總，x 軸標籤為該週日；未滿週不進圖。Total 為全市場合計線。',
+    h2spend: '③ 市場支出規模 proxy（價格 × 使用量）',
+    descspend: 'spend = SDLLMTK × usage_b × 1000 · 週模式用週均價 × 週用量合計',
+    footspend: 'OpenRouter 表面用量 × 全市場混合單價，非全球真實營收、非百分比市占。',
+    sumPrice: '價格 SDLLMTK',
+    sumUsage: '用量週合計 Total',
+    sumSpend: '支出 proxy 週',
+    sumWeekEnd: 'week end',
+    sumUsd: 'USD',
+    hoverHint: '滑過圖表看游標數值',
+    hoverHint2: '滑過看各品牌數值 · 可全部取消後單選',
+    noPrice: '無價格資料',
+    noUsage: '無用量資料',
+    noProduct: '無交叉資料',
+    foot1: '官方點（API／portal）＋官網讀數：',
+    foot1b: ' · 其餘為圖表錨點/插值 · X 軸與②對齊（頭尾）',
+    latest: 'Latest',
+    mode: 'mode',
+    axis: 'axis',
+    n: 'n',
+    docTitle: 'LLM 市場三圖｜價格 × OpenRouter 用量 × 支出 proxy',
+    trafficTitle: '點一下切換：在線 → 本月 → 累計',
+    trafficOnlinePrefix: '在線',
+    trafficToday: '，今天',
+    trafficPeak: '/峰值',
+    trafficMonth: '本月 ',
+    trafficMonthMid: ' 次 / ',
+    trafficMonthEnd: ' 人',
+    trafficTotal: '累計 ',
+    trafficTotalMid: ' 次 / ',
+    trafficTotalEnd: ' 人'
+  }},
+  en: {{
+    title: 'LLM Market Triple Dashboard',
+    subtitle: '① SDLLMTK price · ② OpenRouter usage by brand (click legend · day/week) · ③ Price×usage spend proxy ·',
+    updated: 'Updated: ',
+    nav1: '① Price', nav2: '② Usage', nav3: '③ Spend',
+    h2price: '① SDLLMTK Price',
+    descprice: 'USD / million tokens · official ~7d window + historical anchor interpolation',
+    h2usage: '② OpenRouter Token Usage (multi-brand)',
+    descusage: 'OpenRouter Datasets · click legend to show/hide · after “Hide all”, click one brand to solo · default weekly sum',
+    day: 'Day', week: 'Weekly sum',
+    showall: 'Show all', hideall: 'Hide all',
+    showall_t: 'Show all brands + Total', hideall_t: 'Hide all, then click one legend to solo',
+    footusage: 'Unit: billion tokens. Week = full ISO Mon–Sun 7-day sum; x-axis label is that Sunday; partial weeks omitted. Total is the market-wide line.',
+    h2spend: '③ Market spend-size proxy (price × usage)',
+    descspend: 'spend = SDLLMTK × usage_b × 1000 · weekly mode uses week-avg price × week usage sum',
+    footspend: 'OpenRouter surface usage × blended market unit price — not real global revenue, not share %.',
+    sumPrice: 'Price SDLLMTK',
+    sumUsage: 'Usage weekly Total',
+    sumSpend: 'Spend proxy (week)',
+    sumWeekEnd: 'week end',
+    sumUsd: 'USD',
+    hoverHint: 'hover chart for crosshair values',
+    hoverHint2: 'hover for per-brand values · hide all then click one to solo',
+    noPrice: 'No price data',
+    noUsage: 'No usage data',
+    noProduct: 'No cross data',
+    foot1: 'Official points (API/portal) + site readings: ',
+    foot1b: ' · other points are chart anchors/interpolation · X-axis aligned with chart ②',
+    latest: 'Latest',
+    mode: 'mode',
+    axis: 'axis',
+    n: 'n',
+    docTitle: 'LLM Market Triple Dashboard',
+    trafficTitle: 'Click to cycle: online → month → total',
+    trafficOnlinePrefix: 'Online ',
+    trafficToday: ' · today ',
+    trafficPeak: ' / peak ',
+    trafficMonth: 'This month ',
+    trafficMonthMid: ' hits / ',
+    trafficMonthEnd: ' visitors',
+    trafficTotal: 'All-time ',
+    trafficTotalMid: ' hits / ',
+    trafficTotalEnd: ' visitors'
+  }}
+}};
+
+let LANG = localStorage.getItem('llm_dash_lang') || 'zh';
+function t(key) {{ return (I18N[LANG] && I18N[LANG][key]) || I18N.zh[key] || key; }}
+
+function applyStaticI18n() {{
+  document.querySelectorAll('[data-i18n]').forEach(el => {{
+    const k = el.getAttribute('data-i18n');
+    if (k && I18N[LANG][k]) el.textContent = I18N[LANG][k];
+  }});
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {{
+    const k = el.getAttribute('data-i18n-title');
+    if (k && I18N[LANG][k]) el.title = I18N[LANG][k];
+  }});
+  document.title = t('docTitle');
+  document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-Hant';
+  document.querySelectorAll('#langSwitch button').forEach(b => b.classList.toggle('on', b.dataset.lang === LANG));
+  const trEl = document.getElementById('traffic');
+  if (trEl) trEl.title = t('trafficTitle');
+}}
+
+function setLang(lang) {{
+  LANG = lang;
+  localStorage.setItem('llm_dash_lang', lang);
+  applyStaticI18n();
+  renderSummary();
+  renderMeta1();
+  renderMeta2();
+  renderMeta3();
+  renderFoot1();
+  paintTraffic(null);
+}}
+
+document.getElementById('langSwitch').addEventListener('click', e => {{
+  const b = e.target.closest('button[data-lang]');
+  if (b && b.dataset.lang !== LANG) setLang(b.dataset.lang);
+}});
 
 /** 垂直游標線：滑過任一圖都會畫十字參考線 */
 const crosshairPlugin = {{
@@ -1408,14 +1718,14 @@ function fmtNum(v, digits) {{
   return n.toLocaleString(undefined, {{ maximumFractionDigits: digits ?? 4 }});
 }}
 
-(function summary() {{
+function renderSummary() {{
   const s = D.summary || {{}};
   const boxes = [];
-  if (s.price) boxes.push(`<div class="box"><div class="k">價格 SDLLMTK</div><div class="v" style="color:var(--price)">${{Number(s.price.value).toFixed(4)}}</div><div class="d">${{s.price.date}}</div></div>`);
-  if (s.usage_week_total) boxes.push(`<div class="box"><div class="k">用量週合計 Total</div><div class="v" style="color:var(--accent)">${{Number(s.usage_week_total.value).toLocaleString(undefined,{{maximumFractionDigits:0}})}} b</div><div class="d">week end ${{s.usage_week_total.date}}</div></div>`);
-  if (s.spend_week) boxes.push(`<div class="box"><div class="k">支出 proxy 週</div><div class="v" style="color:var(--spend)">${{Number(s.spend_week.value).toLocaleString(undefined,{{maximumFractionDigits:0}})}}</div><div class="d">USD · ${{s.spend_week.date}}</div></div>`);
+  if (s.price) boxes.push('<div class="box"><div class="k">' + t('sumPrice') + '</div><div class="v" style="color:var(--price)">' + Number(s.price.value).toFixed(4) + '</div><div class="d">' + s.price.date + '</div></div>');
+  if (s.usage_week_total) boxes.push('<div class="box"><div class="k">' + t('sumUsage') + '</div><div class="v" style="color:var(--accent)">' + Number(s.usage_week_total.value).toLocaleString(undefined,{{maximumFractionDigits:0}}) + ' b</div><div class="d">' + t('sumWeekEnd') + ' ' + s.usage_week_total.date + '</div></div>');
+  if (s.spend_week) boxes.push('<div class="box"><div class="k">' + t('sumSpend') + '</div><div class="v" style="color:var(--spend)">' + Number(s.spend_week.value).toLocaleString(undefined,{{maximumFractionDigits:0}}) + '</div><div class="d">' + t('sumUsd') + ' · ' + s.spend_week.date + '</div></div>');
   document.getElementById('summary').innerHTML = boxes.join('');
-}})();
+}}
 
 // last non-null index (axis may pad trailing empty points)
 function lastDefined(arr) {{
@@ -1427,17 +1737,30 @@ function lastDefined(arr) {{
 }}
 
 // ① price
+let priceSeries = [];
+let priceLast = null;
+let priceAxisNote = '';
+function renderMeta1() {{
+  const el = document.getElementById('meta1');
+  if (!priceSeries.length) {{ el.textContent = t('noPrice'); return; }}
+  el.innerHTML = priceLast
+    ? t('latest') + ' <b>' + Number(priceLast.value).toFixed(4) + '</b> · ' + priceLast.date + ' · ' + t('n') + '=' + priceSeries.length + priceAxisNote + ' · <span style="color:#888">' + t('hoverHint') + '</span>'
+    : t('noPrice');
+}}
+function renderFoot1() {{
+  document.getElementById('foot1').textContent = t('foot1') + (D.price.n_official || 0) + t('foot1b')
+  + ' · source ' + (D.price.last_source || '-') + (D.price.stale_days > 0 ? ' · lag ' + D.price.stale_days + 'd' : '');
+}}
 (function() {{
   const series = (D.price && D.price.series) || [];
   if (!series.length) return;
+  priceSeries = series;
   const vals = series.map(r => r.value);
   const li = lastDefined(vals);
-  const last = li >= 0 ? series[li] : null;
-  const axisNote = (D.axis && D.axis.axis_max) ? ` · axis→${{D.axis.axis_max}}` : '';
-  document.getElementById('meta1').innerHTML = last
-    ? `Latest <b>${{Number(last.value).toFixed(4)}}</b> · ${{last.date}} · n=${{series.length}}${{axisNote}} · <span style="color:#888">滑過圖表看游標數值</span>`
-    : '無價格資料';
-  document.getElementById('foot1').textContent = `官方 public_embed 點：${{D.price.n_official||0}} · 其餘為圖表錨點/插值 · X 軸與②對齊（頭尾）`;
+  priceLast = li >= 0 ? series[li] : null;
+  priceAxisNote = (D.axis && D.axis.axis_max) ? ' · ' + t('axis') + '→' + D.axis.axis_max : '';
+  renderMeta1();
+  renderFoot1();
   new Chart(document.getElementById('c1'), {{
     type: 'line',
     data: {{
@@ -1475,6 +1798,7 @@ function lastDefined(arr) {{
 
 // ② usage multi
 let chart2 = null;
+let usageMode = 'week';
 const hiddenUsageLabels = new Set();
 function buildUsageDatasets(mode) {{
   const U = D.usage;
@@ -1543,24 +1867,31 @@ function setAllUsageVisible(on) {{
   }}
   applyHiddenUsage();
 }}
+function renderMeta2() {{
+  const U = D.usage;
+  const el = document.getElementById('meta2');
+  if (!U) {{ el.textContent = t('noUsage'); return; }}
+  const block = U[usageMode];
+  const tot = block.series.Total || [];
+  const li = lastDefined(tot);
+  const last = li >= 0 ? tot[li] : null;
+  const end = li >= 0 ? block.labels[li] : (U.data_end || '');
+  const axisEnd = block.labels[block.labels.length - 1] || '';
+  el.innerHTML = t('latest') + ' Total <b>' + (last != null ? Number(last).toLocaleString(undefined,{{maximumFractionDigits:1}}) : '—') + '</b> · ' + end + ' · ' + t('mode') + '=' + usageMode + ' · ' + t('n') + '=' + block.labels.length + ' · ' + t('axis') + '→' + axisEnd + ' · <span style="color:#888">' + t('hoverHint2') + '</span>';
+}}
 function renderUsage(mode) {{
   const U = D.usage;
   if (!U) {{
-    document.getElementById('meta2').textContent = '無用量資料';
+    document.getElementById('meta2').textContent = t('noUsage');
     return;
   }}
+  usageMode = mode;
   document.querySelectorAll('#mode2 button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
   const data = buildUsageDatasets(mode);
   if (data && data.datasets) {{
     data.datasets.forEach(ds => {{ ds.spanGaps = false; }});
   }}
-  const tot = U[mode].series.Total || [];
-  const li = lastDefined(tot);
-  const last = li >= 0 ? tot[li] : null;
-  const end = li >= 0 ? U[mode].labels[li] : (U.data_end || '');
-  const axisEnd = U[mode].labels[U[mode].labels.length - 1] || '';
-  document.getElementById('meta2').innerHTML =
-    `Latest Total <b>${{last != null ? Number(last).toLocaleString(undefined,{{maximumFractionDigits:1}}) : '—'}}</b> · ${{end}} · mode=${{mode}} · n=${{U[mode].labels.length}} · axis→${{axisEnd}} · <span style="color:#888">滑過看各品牌數值 · 可全部取消後單選</span>`;
+  renderMeta2();
   if (chart2) chart2.destroy();
   chart2 = new Chart(document.getElementById('c2'), {{
     type: 'line',
@@ -1624,24 +1955,31 @@ document.getElementById('mode2').addEventListener('click', e => {{
 }});
 document.getElementById('btn2AllOn').addEventListener('click', () => setAllUsageVisible(true));
 document.getElementById('btn2AllOff').addEventListener('click', () => setAllUsageVisible(false));
-renderUsage((D.usage && D.usage.defaultMode) || 'week');
 
 // ③ product
 let chart3 = null;
-function renderProduct(mode) {{
+let productMode = 'week';
+function renderMeta3() {{
   const P = D.product;
-  if (!P) {{
-    document.getElementById('meta3').textContent = '無交叉資料';
-    return;
-  }}
-  document.querySelectorAll('#mode3 button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
-  const block = P[mode];
+  const el = document.getElementById('meta3');
+  if (!P) {{ el.textContent = t('noProduct'); return; }}
+  const block = P[productMode];
   const li = lastDefined(block.values);
   const last = li >= 0 ? block.values[li] : null;
   const end = li >= 0 ? block.labels[li] : (P.data_end || '');
   const axisEnd = block.labels[block.labels.length - 1] || '';
-  document.getElementById('meta3').innerHTML =
-    `Latest <b>${{last != null ? Number(last).toLocaleString() : '—'}}</b> · ${{end}} · ${{block.unit}} · n=${{block.labels.length}} · axis→${{axisEnd}} · <span style="color:#888">滑過看游標數值</span>`;
+  el.innerHTML = t('latest') + ' <b>' + (last != null ? Number(last).toLocaleString() : '—') + '</b> · ' + end + ' · ' + block.unit + ' · ' + t('n') + '=' + block.labels.length + ' · ' + t('axis') + '→' + axisEnd + ' · <span style="color:#888">' + t('hoverHint') + '</span>';
+}}
+function renderProduct(mode) {{
+  const P = D.product;
+  if (!P) {{
+    document.getElementById('meta3').textContent = t('noProduct');
+    return;
+  }}
+  productMode = mode;
+  document.querySelectorAll('#mode3 button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+  const block = P[mode];
+  renderMeta3();
   if (chart3) chart3.destroy();
   chart3 = new Chart(document.getElementById('c3'), {{
     type: 'line',
@@ -1681,11 +2019,79 @@ document.getElementById('mode3').addEventListener('click', e => {{
   const b = e.target.closest('button[data-mode]');
   if (b) renderProduct(b.dataset.mode);
 }});
+
+applyStaticI18n();
+renderSummary();
+renderUsage((D.usage && D.usage.defaultMode) || 'week');
 renderProduct((D.product && D.product.defaultMode) || 'week');
+
+const LIVE = 'https://wtx.19850926.xyz/';
+const TRAFFIC_SITE = 'llm';
+const SID_KEY = 'llmDashSid';
+const TRAFFIC_MODES = ['online', 'month', 'total'];
+let trafficMode = 0;
+let lastTraffic = null;
+function visitorSid() {{
+  try {{
+    let s = localStorage.getItem(SID_KEY);
+    if (s && /^[a-zA-Z0-9_-]{{8,64}}$/.test(s)) return s;
+    s = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem(SID_KEY, s);
+    return s;
+  }} catch (e) {{
+    return 't' + Date.now().toString(36) + 'x';
+  }}
+}}
+function paintTraffic(st) {{
+  if (st) lastTraffic = st;
+  const el = document.getElementById('traffic');
+  const s = lastTraffic;
+  if (!el) return;
+  if (!s) {{
+    el.textContent = t('trafficOnlinePrefix') + '—' + t('trafficToday') + '—' + t('trafficPeak') + '—';
+    return;
+  }}
+  const mode = TRAFFIC_MODES[trafficMode] || 'online';
+  const d = '—';
+  if (mode === 'month') {{
+    el.textContent = t('trafficMonth') + (s.monthPv != null ? s.monthPv : d) + t('trafficMonthMid') + (s.monthUv != null ? s.monthUv : d) + t('trafficMonthEnd');
+  }} else if (mode === 'total') {{
+    el.textContent = t('trafficTotal') + (s.totalPv != null ? s.totalPv : d) + t('trafficTotalMid') + (s.totalUv != null ? s.totalUv : d) + t('trafficTotalEnd');
+  }} else {{
+    el.textContent = t('trafficOnlinePrefix') + (s.online != null ? s.online : d) + t('trafficToday') + (s.uv != null ? s.uv : d) + t('trafficPeak') + (s.peak != null ? s.peak : d);
+  }}
+}}
+async function trafficPing(isHit) {{
+  try {{
+    const sid = visitorSid();
+    const q = LIVE + '?kind=ping&site=' + encodeURIComponent(TRAFFIC_SITE) + '&sid=' + encodeURIComponent(sid) + (isHit ? '&hit=1' : '');
+    const st = await fetch(q, {{ cache: 'no-store' }}).then(r => r.ok ? r.json() : null);
+    if (st && st.ok) paintTraffic(st);
+  }} catch (e) {{}}
+}}
+function startTraffic() {{
+  const el = document.getElementById('traffic');
+  if (el) {{
+    el.addEventListener('click', () => {{
+      trafficMode = (trafficMode + 1) % TRAFFIC_MODES.length;
+      paintTraffic(null);
+    }});
+  }}
+  trafficPing(true);
+  setInterval(() => {{
+    if (document.visibilityState === 'visible') trafficPing(false);
+  }}, 30000);
+  document.addEventListener('visibilitychange', () => {{
+    if (document.visibilityState === 'visible') trafficPing(false);
+  }});
+}}
+startTraffic();
+
 </script>
 </body>
 </html>
 """
+
     CHART_DASHBOARD.write_text(html, encoding="utf-8")
 
 
@@ -1698,15 +2104,50 @@ def main() -> int:
 
     # 1 price
     price_rows = load_price_rows()
+    price_status: dict = {"source": None, "error": None, "stale_days": None, "skipped": []}
+    # a total outage longer than this stops pretending and fails the job
+    MAX_SILENT_LAG_DAYS = 5
     if not args.skip_price:
-        print("Fetching SDLLMTK public window...")
-        window = fetch_sdllmtk_window()
-        for d, v in sorted(window.items()):
-            print(f"  price {d} {v:.4f}")
-        backup(PRICE_CSV)
-        price_rows = merge_price(price_rows, window)
-        save_price(price_rows)
-        print("price rows", len(price_rows))
+        print("Fetching SDLLMTK price...")
+        try:
+            window, price_source, skipped = fetch_price_any_source(price_rows)
+            for err in skipped:
+                print("NOTE source skipped:", err)
+            price_status["skipped"] = skipped
+            for d, v in sorted(window.items()):
+                print(f"  price {d} {v:.4f} [{price_source}]")
+            backup(PRICE_CSV)
+            price_rows = merge_price(price_rows, window, price_source)
+            save_price(price_rows)
+            print("price rows", len(price_rows), "source", price_source)
+            price_status["source"] = price_source
+        except Exception as exc:  # noqa: BLE001
+            # transient degradation stays non-fatal, but it must be visible:
+            # a green job with frozen data is worse than a red one.
+            price_status["error"] = f"{type(exc).__name__}: {exc}"
+            print("WARN price fetch failed:", price_status["error"])
+            print(f"::warning::SDLLMTK price fetch FAILED: {price_status['error']}")
+            if not price_rows:
+                print("FAIL no price history at all -> nothing to chart")
+                return 1
+    if price_rows:
+        newest = max(r["date"] for r in price_rows)
+        price_status["last_date"] = newest
+        price_status["stale_days"] = (date.today() - datetime.strptime(newest, "%Y-%m-%d").date()).days
+        if price_status["stale_days"] > 2 and price_status["error"]:
+            print(f"WARN price stale {price_status['stale_days']} days (last {newest})")
+        if price_status["stale_days"] > 3:
+            # surface in the Actions UI/email instead of failing silently
+            print(
+                f"::warning::SDLLMTK price stale {price_status['stale_days']} days "
+                f"(last {newest}, source {price_status['source'] or 'cache'})"
+            )
+        if price_status["error"] and price_status["stale_days"] > MAX_SILENT_LAG_DAYS:
+            print(
+                f"FAIL price dead {price_status['stale_days']} days "
+                f"(> {MAX_SILENT_LAG_DAYS}) and no source works -> stop publishing stale data"
+            )
+            return 1
     price_daily = price_series_daily(price_rows)
 
     # 2 usage
@@ -1763,7 +2204,7 @@ def main() -> int:
     write_price_chart(price_daily, price_rows)
     if usage_rows:
         write_usage_chart(usage_rows)
-    write_product_chart(product_rows)
+    write_product_chart(product_rows, price_daily, usage_total)
     write_combined_dashboard(price_daily, price_rows, usage_rows, product_rows)
 
     meta = {
@@ -1772,6 +2213,7 @@ def main() -> int:
         "price_daily": len(price_daily),
         "usage_days": len(usage_total),
         "product_days": len(product_rows),
+        "price_status": price_status,
         "last_price": price_rows[-1] if price_rows else None,
         "last_usage_total": (
             {"date": usage_rows[-1]["date"], "Total": usage_rows[-1]["Total"]} if usage_rows else None
