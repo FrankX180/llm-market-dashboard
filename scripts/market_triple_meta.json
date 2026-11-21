@@ -1,17 +1,14 @@
 {
-  "updated_at": "2026-11-20T03:56:22",
+  "updated_at": "2026-11-21T07:41:52",
   "price_points": 172,
   "price_daily": 353,
   "usage_days": 354,
   "product_days": 353,
   "price_status": {
-    "source": "public_embed",
-    "error": null,
-    "stale_days": 2,
-    "skipped": [
-      "api: skipped (no SILICONDATA_API_TOKEN)",
-      "product_page: RuntimeError: product page reading block not found"
-    ],
+    "source": null,
+    "error": "RuntimeError: all SDLLMTK sources failed -> api: skipped (no SILICONDATA_API_TOKEN) | product_page: RuntimeError: product page reading block not found | public_embed: RuntimeError: public_embed value 2026-10-22=0.948 deviates 25.3% from last known 2026-11-18=0.7566; refusing to merge (source scale changed?)",
+    "stale_days": 3,
+    "skipped": [],
     "last_date": "2026-11-18"
   },
   "last_price": {
