@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-21T07:41:52",
+  "updated_at": "2026-11-22T07:27:25",
   "price_points": 172,
   "price_daily": 353,
   "usage_days": 354,
@@ -7,7 +7,7 @@
   "price_status": {
     "source": null,
     "error": "RuntimeError: all SDLLMTK sources failed -> api: skipped (no SILICONDATA_API_TOKEN) | product_page: RuntimeError: product page reading block not found | public_embed: RuntimeError: public_embed value 2026-10-22=0.948 deviates 25.3% from last known 2026-11-18=0.7566; refusing to merge (source scale changed?)",
-    "stale_days": 3,
+    "stale_days": 4,
     "skipped": [],
     "last_date": "2026-11-18"
   },
