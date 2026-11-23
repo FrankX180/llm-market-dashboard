@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-11-22T07:27:25",
+  "updated_at": "2026-11-23T08:11:05",
   "price_points": 172,
   "price_daily": 353,
-  "usage_days": 354,
+  "usage_days": 357,
   "product_days": 353,
   "price_status": {
     "source": null,
-    "error": "RuntimeError: all SDLLMTK sources failed -> api: skipped (no SILICONDATA_API_TOKEN) | product_page: RuntimeError: product page reading block not found | public_embed: RuntimeError: public_embed value 2026-10-22=0.948 deviates 25.3% from last known 2026-11-18=0.7566; refusing to merge (source scale changed?)",
-    "stale_days": 4,
+    "error": "RuntimeError: all SDLLMTK sources failed -> api: skipped (no SILICONDATA_API_TOKEN) | product_page: RuntimeError: product page reading block not found | public_embed: RuntimeError: public_embed value 2026-10-25=0.9526 deviates 25.9% from last known 2026-11-18=0.7566; refusing to merge (source scale changed?)",
+    "stale_days": 5,
     "skipped": [],
     "last_date": "2026-11-18"
   },
@@ -18,8 +18,8 @@
     "note": "portal token-index-chart RSC"
   },
   "last_usage_total": {
-    "date": "2026-11-19",
-    "Total": "53851.6748"
+    "date": "2026-11-22",
+    "Total": "31831.7096"
   },
   "last_product": {
     "date": "2026-11-18",
