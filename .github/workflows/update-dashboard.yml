@@ -8,6 +8,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  # 兩個 run 同時跑時，後跑的 push 會被拒（2026-11-26 實測 rejected: fetch first）。
+  # 排隊不取消：前一個先把資料 commit 上去，後一個 checkout 到新資料後多半 no change。
+  group: update-dashboard
+  cancel-in-progress: false
 jobs:
   update:
     runs-on: ubuntu-latest
