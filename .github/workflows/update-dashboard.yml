@@ -36,6 +36,11 @@ jobs:
       - name: Publish index.html and price CSV
         run: |
           cp scripts/market_triple_dashboard.html index.html
+          git fetch origin master
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/master)" ]; then
+            echo "origin/master moved after this run started (overlapping run); skipping publish"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html scripts/sdllmtk_daily.csv scripts/openrouter_usage_daily.csv || true
@@ -51,5 +56,9 @@ jobs:
             echo "another run already published identical content"
             exit 0
           fi
-          git pull --rebase --autostash origin master
+          if ! git pull --rebase --autostash origin master; then
+            echo "rebase conflict: overlapping run already published this window; keeping remote"
+            git rebase --abort || true
+            exit 0
+          fi
           git push
