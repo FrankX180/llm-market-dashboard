@@ -1,13 +1,13 @@
 {
-  "updated_at": "2026-11-26T01:48:35",
+  "updated_at": "2026-11-25T17:49:47",
   "price_points": 178,
   "price_daily": 359,
-  "usage_days": 357,
-  "product_days": 357,
+  "usage_days": 359,
+  "product_days": 359,
   "price_status": {
     "source": "public_embed",
     "error": null,
-    "stale_days": 2,
+    "stale_days": 1,
     "skipped": [
       "api: skipped (no SILICONDATA_API_TOKEN)"
     ],
@@ -20,22 +20,22 @@
     "note": "portal token-index-chart RSC"
   },
   "last_usage_total": {
-    "date": "2026-11-22",
-    "Total": "31831.7096"
+    "date": "2026-11-24",
+    "Total": "38829.6455"
   },
   "last_product": {
-    "date": "2026-11-22",
-    "price_sdllmtk": 0.632,
-    "usage_total_b": 31831.7096,
-    "spend_usd_day": 20117640.4672,
-    "product_raw": 20117.6404672
+    "date": "2026-11-24",
+    "price_sdllmtk": 0.6138,
+    "usage_total_b": 38829.6455,
+    "spend_usd_day": 23833636.4079,
+    "product_raw": 23833.6364079
   },
   "formula": "spend_usd_day = SDLLMTK * usage_total_b * 1000",
   "charts": [
-    "E:\\_Project\\llm-market-dashboard\\scripts\\market_triple_dashboard.html",
-    "E:\\_Project\\llm-market-dashboard\\scripts\\sdllmtk_chart.html",
-    "E:\\_Project\\llm-market-dashboard\\scripts\\openrouter_usage_chart.html",
-    "E:\\_Project\\llm-market-dashboard\\scripts\\expenditure_proxy_chart.html"
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/sdllmtk_chart.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/openrouter_usage_chart.html",
+    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/expenditure_proxy_chart.html"
   ],
-  "dashboard": "E:\\_Project\\llm-market-dashboard\\scripts\\market_triple_dashboard.html"
+  "dashboard": "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html"
 }
