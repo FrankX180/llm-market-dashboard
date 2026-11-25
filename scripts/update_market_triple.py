@@ -285,7 +285,7 @@ def merge_price(existing: list[dict], window: dict[str, float], source: str = "p
     note = {
         "api_official": "api.silicondata.com /api/token-index/index",
         "public_embed": "portal token-index-chart RSC",
-        "product_page": "silicondata product page (2dp close)",
+        "product_page": "silicondata product page (chart points, 4dp)",
     }
     by = {r["date"]: r for r in existing}
     for d, v in window.items():

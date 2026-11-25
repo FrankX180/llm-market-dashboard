@@ -34,7 +34,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.html scripts/sdllmtk_daily.csv scripts/openrouter_usage_daily.csv || true
-          git add scripts/expenditure_proxy_daily.csv scripts/market_triple_meta.json || true
+          git add scripts/expenditure_proxy_daily.csv scripts/expenditure_proxy_weekly.csv scripts/market_triple_meta.json || true
           git diff --cached --quiet && echo "no change" && exit 0
           git commit -m "dashboard update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push
