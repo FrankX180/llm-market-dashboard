@@ -31,7 +31,7 @@ jobs:
         run: python scripts/update_market_triple.py --skip-mm
         env:
           # optional: portal login token -> official 4-decimal API instead of the
-          # 2-decimal public product-page fallback. Leave unset to use the fallback.
+          # public product-page fallback. Leave unset to use the fallback.
           SILICONDATA_API_TOKEN: ${{ secrets.SILICONDATA_API_TOKEN }}
       - name: Publish index.html and price CSV
         run: |
@@ -43,8 +43,13 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html scripts/sdllmtk_daily.csv scripts/openrouter_usage_daily.csv || true
-          git add scripts/expenditure_proxy_daily.csv scripts/expenditure_proxy_weekly.csv scripts/market_triple_meta.json || true
+          # add one by one: a single missing path makes `git add a b c` fail as a whole,
+          # which silently skips the commit and leaves a green job with stale data
+          for f in index.html scripts/sdllmtk_daily.csv scripts/openrouter_usage_daily.csv \
+                   scripts/expenditure_proxy_daily.csv scripts/expenditure_proxy_weekly.csv \
+                   scripts/market_triple_meta.json; do
+            if [ -f "$f" ]; then git add -- "$f"; fi
+          done
           git diff --cached --quiet && echo "no change" && exit 0
           git commit -m "dashboard update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if git push; then
