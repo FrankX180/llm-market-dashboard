@@ -2,3 +2,5 @@ __pycache__/
 Backup/
 *.pyc
 .DS_Store
+99_TempScripts/
+scripts/*_chart.html
