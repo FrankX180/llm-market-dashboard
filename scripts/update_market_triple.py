@@ -152,23 +152,32 @@ def fetch_sdllmtk_api(token: str, days_back: int = 21) -> dict[str, float]:
     return out
 
 
-# ---------- price: public product page (2 decimals, daily close) ----------
+# ---------- price: public product page (4 decimals from the chart points) ----------
 def fetch_sdllmtk_product_page() -> dict[str, float]:
     """Read the public reading block on the siliconindex product page.
 
-    Portal embed data went private on 2026-10-21; the marketing site still
-    server-renders the latest daily close (rounded to 2 decimals).
-
-    Same-series evidence (2026-10-23): last portal value 2026-10-20 = 0.9411
-    rounds to the 0.94 the page prints as of Oct 21, i.e. same index + 2dp
-    quantisation (+/-0.005), not a different metric. sanity_check_window()
-    guards the case where that stops being true.
+    2026-11-25: page markup changed. The SDLLMTK chart card now ships
+    `"value":"$$0.61"` (display string, 2dp) alongside `"rawValue":"0.61"` and a
+    7-entry `points` array of 4-decimal prices, so the old `"value":"<number>"`
+    regex stopped matching. Read `points` first (same series as the portal
+    embed, full precision); fall back to rawValue + asOf for the latest close.
     """
     html = http_get(PRODUCT_INDEX_URL).replace('\\"', '"')
+    block = re.search(r'"llm-token"\s*:\s*\{(.*?)"open-llm"\s*:\s*\{', html, re.S)
+    if not block:
+        block = re.search(r'"llm-token"\s*:\s*\{.*?"href"', html, re.S)
+    if not block:
+        raise RuntimeError("product page llm-token block not found")
+    body = block.group(1) if block.groups() else block.group(0)
+
+    points = re.findall(r'"date"\s*:\s*"(20\d{2}-\d{2}-\d{2})"\s*,\s*"price"\s*:\s*([0-9.]+)', body)
+    out = {d: float(v) for d, v in points if float(v) > 0}
+    if out:
+        return out
+
     m = re.search(
-        r'"llm-token"\s*:\s*\{\s*"value"\s*:\s*"([0-9.]+)"'
-        r'.{0,200}?"asOf"\s*:\s*"As of ([A-Za-z]{3,9}) (\d{1,2}), (\d{4})"',
-        html,
+        r'"rawValue"\s*:\s*"([0-9.]+)".{0,300}?"asOf"\s*:\s*"As of ([A-Za-z]{3,9}) (\d{1,2}), (\d{4})"',
+        body,
         re.S,
     )
     if not m:
@@ -189,24 +198,35 @@ def sanity_check_window(
     Different sources must stay on the same scale: if a fetched value deviates
     from the last known price by more than max_dev, treat it as a source change
     instead of pushing garbage into the CSV.
+
+    Only the NEWEST fetched point is compared. A multi-week window legitimately
+    contains older prices far from today's close: on 2026-11-25 the 30-day
+    portal window still carried 2026-10-25=0.9526, 25.9% above the 2026-11-18
+    close of 0.7566, and comparing every point rejected a perfectly good window
+    for three days running.
     """
-    if source == "api_official" or not existing:
+    if source == "api_official" or not existing or not window:
         return
     last = max(existing, key=lambda r: r["date"])
     base = float(last["value"])
     if base <= 0:
         return
-    for d, v in window.items():
-        dev = abs(float(v) - base) / base
-        if dev > max_dev:
-            raise RuntimeError(
-                f"{source} value {d}={v} deviates {dev:.1%} from last known {last['date']}={base}; "
-                "refusing to merge (source scale changed?)"
-            )
+    newest_day = max(window)
+    newest = float(window[newest_day])
+    dev = abs(newest - base) / base
+    if dev > max_dev:
+        raise RuntimeError(
+            f"{source} latest {newest_day}={newest} deviates {dev:.1%} from last known "
+            f"{last['date']}={base}; refusing to merge (source scale changed?)"
+        )
 
 
 def fetch_price_any_source(existing: list[dict] | None = None) -> tuple[dict[str, float], str, list[str]]:
-    """Try official API -> public product page -> legacy portal RSC embed.
+    """Try official API -> portal RSC embed (30d, 4dp) -> public product page (7d).
+
+    The portal embed went private for a while (2026-10-21) which is why the
+    product page used to be first; it is back and carries more days, so it goes
+    first now and the product page stays as the fallback.
 
     Returns (window, source_name, errors_of_skipped_sources). The caller must log
     the errors: a silently discarded failure is how an upstream outage turns
@@ -223,7 +243,7 @@ def fetch_price_any_source(existing: list[dict] | None = None) -> tuple[dict[str
     else:
         errors.append(f"api: skipped (no {API_TOKEN_ENV})")
 
-    for name, fn in (("product_page", fetch_sdllmtk_product_page), ("public_embed", fetch_sdllmtk_window)):
+    for name, fn in (("public_embed", fetch_sdllmtk_window), ("product_page", fetch_sdllmtk_product_page)):
         try:
             window = fn()
             sanity_check_window(window, existing or [], name)

@@ -1,19 +1,21 @@
 {
-  "updated_at": "2026-11-23T08:11:05",
-  "price_points": 172,
-  "price_daily": 353,
+  "updated_at": "2026-11-26T01:48:35",
+  "price_points": 178,
+  "price_daily": 359,
   "usage_days": 357,
-  "product_days": 353,
+  "product_days": 357,
   "price_status": {
-    "source": null,
-    "error": "RuntimeError: all SDLLMTK sources failed -> api: skipped (no SILICONDATA_API_TOKEN) | product_page: RuntimeError: product page reading block not found | public_embed: RuntimeError: public_embed value 2026-10-25=0.9526 deviates 25.9% from last known 2026-11-18=0.7566; refusing to merge (source scale changed?)",
-    "stale_days": 5,
-    "skipped": [],
-    "last_date": "2026-11-18"
+    "source": "public_embed",
+    "error": null,
+    "stale_days": 2,
+    "skipped": [
+      "api: skipped (no SILICONDATA_API_TOKEN)"
+    ],
+    "last_date": "2026-11-24"
   },
   "last_price": {
-    "date": "2026-11-18",
-    "value": 0.7566,
+    "date": "2026-11-24",
+    "value": 0.6138,
     "source": "public_embed",
     "note": "portal token-index-chart RSC"
   },
@@ -22,18 +24,18 @@
     "Total": "31831.7096"
   },
   "last_product": {
-    "date": "2026-11-18",
-    "price_sdllmtk": 0.7566,
-    "usage_total_b": 56246.1443,
-    "spend_usd_day": 42555832.777380005,
-    "product_raw": 42555.832777380005
+    "date": "2026-11-22",
+    "price_sdllmtk": 0.632,
+    "usage_total_b": 31831.7096,
+    "spend_usd_day": 20117640.4672,
+    "product_raw": 20117.6404672
   },
   "formula": "spend_usd_day = SDLLMTK * usage_total_b * 1000",
   "charts": [
-    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html",
-    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/sdllmtk_chart.html",
-    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/openrouter_usage_chart.html",
-    "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/expenditure_proxy_chart.html"
+    "E:\\_Project\\llm-market-dashboard\\scripts\\market_triple_dashboard.html",
+    "E:\\_Project\\llm-market-dashboard\\scripts\\sdllmtk_chart.html",
+    "E:\\_Project\\llm-market-dashboard\\scripts\\openrouter_usage_chart.html",
+    "E:\\_Project\\llm-market-dashboard\\scripts\\expenditure_proxy_chart.html"
   ],
-  "dashboard": "/home/runner/work/llm-market-dashboard/llm-market-dashboard/scripts/market_triple_dashboard.html"
+  "dashboard": "E:\\_Project\\llm-market-dashboard\\scripts\\market_triple_dashboard.html"
 }
