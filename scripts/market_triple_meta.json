@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-11-27T09:05:12",
-  "price_points": 179,
-  "price_daily": 360,
+  "updated_at": "2026-11-28T08:27:26",
+  "price_points": 180,
+  "price_daily": 361,
   "usage_days": 359,
   "product_days": 359,
   "price_status": {
@@ -11,11 +11,11 @@
     "skipped": [
       "api: skipped (no SILICONDATA_API_TOKEN)"
     ],
-    "last_date": "2026-11-25"
+    "last_date": "2026-11-26"
   },
   "last_price": {
-    "date": "2026-11-25",
-    "value": 0.6104,
+    "date": "2026-11-26",
+    "value": 0.6042,
     "source": "public_embed",
     "note": "portal token-index-chart RSC"
   },
